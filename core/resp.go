@@ -5,31 +5,20 @@ import (
 	"fmt"
 )
 
-func Decode(data []byte) (interface{}, error) {
-	if len(data) == 0 {
-		return nil, errors.New("no data")
+// reads the length typically the first integer of the string
+// until hit by an non-digit byte and returns
+// the integer and the delta = length + 2 (CRLF)
+// TODO: Make it simpler and read until we get `\r` just like other functions
+func readLength(data []byte) (int, int) {
+	pos, length := 0, 0
+	for pos = range data {
+		b := data[pos]
+		if !(b >= '0' && b <= '9') {
+			return length, pos + 2
+		}
+		length = length*10 + int(b-'0')
 	}
-	value, _, err := DecodeOne(data)
-	return value, err
-}
-
-func DecodeOne(data []byte) (interface{}, int, error) {
-	if len(data) == 0 {
-		return nil, 0, errors.New("no data")
-	}
-	switch data[0] {
-	case '+':
-		return readSimpleString(data)
-	case '-':
-		return readError(data)
-	case ':':
-		return readInt64(data)
-	case '$':
-		return readBulkString(data)
-	case '*':
-		return readArray(data)
-	}
-	return nil, 0, nil
+	return 0, 0
 }
 
 // reads a RESP encoded simple string from data and returns
@@ -79,22 +68,6 @@ func readBulkString(data []byte) (string, int, error) {
 	return string(data[pos:(pos + len)]), pos + len + 2, nil
 }
 
-// reads the length typically the first integer of the string
-// until hit by an non-digit byte and returns
-// the integer and the delta = length + 2 (CRLF)
-// TODO: Make it simpler and read until we get `\r` just like other functions
-func readLength(data []byte) (int, int) {
-	pos, length := 0, 0
-	for pos = range data {
-		b := data[pos]
-		if !(b >= '0' && b <= '9') {
-			return length, pos + 2
-		}
-		length = length*10 + int(b-'0')
-	}
-	return 0, 0
-}
-
 // reads a RESP encoded array from data and returns
 // the array, the delta, and the error
 func readArray(data []byte) (interface{}, int, error) {
@@ -117,19 +90,40 @@ func readArray(data []byte) (interface{}, int, error) {
 	return elems, pos, nil
 }
 
-func DecodeArrayString(data []byte) ([]string, error) {
-	value, err := Decode(data)
-	if err != nil {
-		return nil, err
+func DecodeOne(data []byte) (interface{}, int, error) {
+	if len(data) == 0 {
+		return nil, 0, errors.New("no data")
 	}
-
-	ts := value.([]interface{})
-	tokens := make([]string, len(ts))
-	for i := range tokens {
-		tokens[i] = ts[i].(string)
+	switch data[0] {
+	case '+':
+		return readSimpleString(data)
+	case '-':
+		return readError(data)
+	case ':':
+		return readInt64(data)
+	case '$':
+		return readBulkString(data)
+	case '*':
+		return readArray(data)
 	}
+	return nil, 0, nil
+}
 
-	return tokens, nil
+func Decode(data []byte) ([]interface{}, error) {
+	if len(data) == 0 {
+		return nil, errors.New("no data")
+	}
+	var values []interface{} = make([]interface{}, 0)
+	var index int = 0
+	for index < len(data) {
+		value, delta, err := DecodeOne(data[index:])
+		if err != nil {
+			return values, err
+		}
+		index = index + delta
+		values = append(values, value)
+	}
+	return values, nil
 }
 
 func Encode(value interface{}, isSimple bool) []byte {
@@ -141,6 +135,8 @@ func Encode(value interface{}, isSimple bool) []byte {
 		return []byte(fmt.Sprintf("$%d\r\n%s\r\n", len(v), v))
 	case int, int8, int16, int32, int64:
 		return []byte(fmt.Sprintf(":%d\r\n", v))
+	case error:
+		return []byte(fmt.Sprintf("-%s\r\n", v))
 	default:
 		return RESP_NIL
 	}
