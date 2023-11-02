@@ -1,6 +1,10 @@
 package core
 
-import "github.com/vivekimsit/quickdb/config"
+import (
+	"time"
+
+	"github.com/vivekimsit/quickdb/config"
+)
 
 func evict() {
 	switch config.EvictionStrategy {
@@ -8,6 +12,22 @@ func evict() {
 		evictFirst()
 	case "allkeys-random":
 		evictAllkeysRandom()
+	case "allkeys-lru":
+		evictAllkeysLRU()
+	}
+}
+
+// TODO: no need to populate everytime. should populate
+// only when the number of keys to evict is less than what we have in the pool
+func evictAllkeysLRU() {
+	populateEvictionPool()
+	evictCount := int16(config.EvictionRatio * float64(config.KeysLimit))
+	for i := 0; i < int(evictCount) && len(ePool.pool) > 0; i++ {
+		item := ePool.Pop()
+		if item == nil {
+			return
+		}
+		Del(item.key)
 	}
 }
 
@@ -16,6 +36,21 @@ func evictFirst() {
 		Del(k)
 		return
 	}
+}
+
+/*
+ *  The approximated LRU algorithm
+ */
+func getCurrentClock() uint32 {
+	return uint32(time.Now().Unix()) & 0x00FFFFFF
+}
+
+func getIdleTime(lastAccessedAt uint32) uint32 {
+	c := getCurrentClock()
+	if c >= lastAccessedAt {
+		return c - lastAccessedAt
+	}
+	return (0x00FFFFFF - lastAccessedAt) + c
 }
 
 // Randomly removes keys to make space for the new data added.
@@ -28,6 +63,17 @@ func evictAllkeysRandom() {
 		Del(k)
 		evictCount--
 		if evictCount <= 0 {
+			break
+		}
+	}
+}
+
+func populateEvictionPool() {
+	sampleSize := 5
+	for k := range store {
+		ePool.Push(k, store[k].LastAccessedAt)
+		sampleSize--
+		if sampleSize == 0 {
 			break
 		}
 	}
